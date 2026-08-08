@@ -8,13 +8,11 @@
 #include <chrono>
 #include <iomanip>
 #include <sstream>
-#include <mutex>           // for std::once_flag
 
 namespace fs = std::filesystem;
 
 // Logger
 static fs::path g_logPath;
-static HMODULE  g_hSelf = nullptr;   // stored for the loading thread
 
 static std::string GetTimestamp()
 {
@@ -62,49 +60,38 @@ static XInputGetKeystroke_t           Real_XInputGetKeystroke          = nullptr
 static XInputGetAudioDeviceIds_t      Real_XInputGetAudioDeviceIds     = nullptr;
 static XInputGetDSoundAudioDeviceGuids_t Real_XInputGetDSoundAudioDeviceGuids = nullptr;
 
-static std::once_flag g_xinputInitFlag;
-
 static bool LoadRealXInput()
 {
-    bool loaded = false;
-    std::call_once(g_xinputInitFlag, [&]() {
-        // Try multiple XInput versions (most common first)
-        const wchar_t* candidates[] = { L"XInput1_4.dll", L"XInput1_3.dll", L"XInput9_1_0.dll" };
-        for (const auto& name : candidates)
-        {
-            wchar_t sysPath[MAX_PATH] = {};
-            GetSystemDirectoryW(sysPath, MAX_PATH);
-            std::wstring fullPath = std::wstring(sysPath) + L"\\" + name;
+    if (g_realXInput)
+        return true;
 
-            g_realXInput = LoadLibraryW(fullPath.c_str());
-            if (g_realXInput)
-                break;
-        }
+    wchar_t sysPath[MAX_PATH] = {};
+    GetSystemDirectoryW(sysPath, MAX_PATH);
+    std::wstring fullPath = std::wstring(sysPath) + L"\\XInput1_4.dll";
 
-        if (!g_realXInput)
-        {
-            WriteLog("Failed to load any real XInput DLL");
-            return;
-        }
+    g_realXInput = LoadLibraryW(fullPath.c_str());
+    if (!g_realXInput)
+    {
+        WriteLog("Failed to load real system XInput1_4.dll");
+        return false;
+    }
 
-        Real_XInputGetState              = (XInputGetState_t)GetProcAddress(g_realXInput, "XInputGetState");
-        Real_XInputSetState              = (XInputSetState_t)GetProcAddress(g_realXInput, "XInputSetState");
-        Real_XInputGetCapabilities       = (XInputGetCapabilities_t)GetProcAddress(g_realXInput, "XInputGetCapabilities");
-        Real_XInputEnable                = (XInputEnable_t)GetProcAddress(g_realXInput, "XInputEnable");
-        Real_XInputGetBatteryInformation = (XInputGetBatteryInformation_t)GetProcAddress(g_realXInput, "XInputGetBatteryInformation");
-        Real_XInputGetKeystroke          = (XInputGetKeystroke_t)GetProcAddress(g_realXInput, "XInputGetKeystroke");
-        Real_XInputGetAudioDeviceIds     = (XInputGetAudioDeviceIds_t)GetProcAddress(g_realXInput, "XInputGetAudioDeviceIds");
-        Real_XInputGetDSoundAudioDeviceGuids = (XInputGetDSoundAudioDeviceGuids_t)GetProcAddress(g_realXInput, "XInputGetDSoundAudioDeviceGuids");
+    Real_XInputGetState              = (XInputGetState_t)GetProcAddress(g_realXInput, "XInputGetState");
+    Real_XInputSetState              = (XInputSetState_t)GetProcAddress(g_realXInput, "XInputSetState");
+    Real_XInputGetCapabilities       = (XInputGetCapabilities_t)GetProcAddress(g_realXInput, "XInputGetCapabilities");
+    Real_XInputEnable                = (XInputEnable_t)GetProcAddress(g_realXInput, "XInputEnable");
+    Real_XInputGetBatteryInformation = (XInputGetBatteryInformation_t)GetProcAddress(g_realXInput, "XInputGetBatteryInformation");
+    Real_XInputGetKeystroke          = (XInputGetKeystroke_t)GetProcAddress(g_realXInput, "XInputGetKeystroke");
+    Real_XInputGetAudioDeviceIds     = (XInputGetAudioDeviceIds_t)GetProcAddress(g_realXInput, "XInputGetAudioDeviceIds");
+    Real_XInputGetDSoundAudioDeviceGuids = (XInputGetDSoundAudioDeviceGuids_t)GetProcAddress(g_realXInput, "XInputGetDSoundAudioDeviceGuids");
 
-        if (!Real_XInputGetState)
-        {
-            WriteLog("Failed to resolve XInputGetState");
-            FreeLibrary(g_realXInput);
-            g_realXInput = nullptr;
-        }
-    });
+    if (!Real_XInputGetState)
+    {
+        WriteLog("Failed to resolve XInputGetState");
+        return false;
+    }
 
-    return g_realXInput != nullptr && Real_XInputGetState != nullptr;
+    return true;
 }
 
 extern "C" {
@@ -166,15 +153,11 @@ __declspec(dllexport) DWORD WINAPI XInputGetDSoundAudioDeviceGuids(DWORD dwUserI
 
 } // extern "C"
 
-// ----------------------------------------------------------------------
-// MOD LOADING (now run from a separate thread)
-// ----------------------------------------------------------------------
-
+// Load mods
 static void LoadMods(HMODULE hSelf)
 {
     wchar_t modulePath[MAX_PATH] = {};
-    if (!GetModuleFileNameW(hSelf, modulePath, MAX_PATH))
-        return;
+    GetModuleFileNameW(hSelf, modulePath, MAX_PATH);
 
     fs::path dllDir = fs::path(modulePath).parent_path();
     g_logPath = dllDir / L"dumbLoader.log";
@@ -203,14 +186,12 @@ static void LoadMods(HMODULE hSelf)
             dlls.push_back(entry.path());
     }
 
-    // Sort alphabetically
+    // Priority: alphabetical order (use 01_, 02_ etc. if you need specific order)
     std::sort(dlls.begin(), dlls.end(), [](const fs::path& a, const fs::path& b) {
         return a.filename().wstring() < b.filename().wstring();
     });
 
-    WriteLog("Found " + std::to_string(dlls.size()) + " mod DLL(s)");
-
-    // Load each
+    // Load in order
     for (const auto& path : dlls)
     {
         HMODULE loaded = LoadLibraryW(path.c_str());
@@ -218,27 +199,17 @@ static void LoadMods(HMODULE hSelf)
         {
             WriteLog("Failed to load: " + path.string() + " (error " + std::to_string(GetLastError()) + ")");
         }
-        else
-        {
-            WriteLog("Loaded: " + path.string());
-        }
     }
 }
 
+// --- THE ONLY CHANGE: thread wrapper ---
 static DWORD WINAPI LoadModsThread(LPVOID param)
 {
     HMODULE hSelf = (HMODULE)param;
-
-    // Give the game a moment to fully initialise (adjust if needed)
-    Sleep(150);
-
+    Sleep(100); // let the game finish its own startup
     LoadMods(hSelf);
     return 0;
 }
-
-// ----------------------------------------------------------------------
-// DllMain
-// ----------------------------------------------------------------------
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID)
 {
@@ -246,9 +217,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID)
     {
     case DLL_PROCESS_ATTACH:
         DisableThreadLibraryCalls(hModule);
-        g_hSelf = hModule;
-
-        // Spawn a thread to load mods – this avoids the loader lock deadlock.
+        // Instead of calling LoadMods here, create a thread.
         CreateThread(NULL, 0, LoadModsThread, hModule, 0, NULL);
         break;
 
