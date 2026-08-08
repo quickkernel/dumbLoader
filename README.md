@@ -1,6 +1,6 @@
 # dumbLoader
 
-**Lightning fast, blazingly simple.**
+## **Lightning fast, blazingly simple.**
 
 A Geometry Dash mod loader that does one thing and one thing only.
 
