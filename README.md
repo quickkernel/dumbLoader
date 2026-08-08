@@ -21,6 +21,8 @@ A Geometry Dash mod loader that does one thing and one thing only.
 ### Building
 
 ```bash
+git clone https://github.com/quickkernel/dumbLoader.git
+cd dumbLoader
 mkdir build
 cd build
 cmake .. -A x64
