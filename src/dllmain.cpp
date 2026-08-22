@@ -1,5 +1,4 @@
 #include <Windows.h>
-#include <Xinput.h>
 #include <string>
 #include <vector>
 #include <algorithm>
@@ -8,6 +7,55 @@
 #include <chrono>
 #include <iomanip>
 #include <sstream>
+
+namespace fs = std::filesystem;
+
+// Minimal XInput types (enough for a pure proxy – no need for the real header)
+#ifndef XINPUT_TYPES_DEFINED
+#define XINPUT_TYPES_DEFINED
+
+typedef struct _XINPUT_GAMEPAD {
+    WORD  wButtons;
+    BYTE  bLeftTrigger;
+    BYTE  bRightTrigger;
+    SHORT sThumbLX;
+    SHORT sThumbLY;
+    SHORT sThumbRX;
+    SHORT sThumbRY;
+} XINPUT_GAMEPAD, *PXINPUT_GAMEPAD;
+
+typedef struct _XINPUT_STATE {
+    DWORD          dwPacketNumber;
+    XINPUT_GAMEPAD Gamepad;
+} XINPUT_STATE, *PXINPUT_STATE;
+
+typedef struct _XINPUT_VIBRATION {
+    WORD wLeftMotorSpeed;
+    WORD wRightMotorSpeed;
+} XINPUT_VIBRATION, *PXINPUT_VIBRATION;
+
+typedef struct _XINPUT_CAPABILITIES {
+    BYTE             Type;
+    BYTE             SubType;
+    WORD             Flags;
+    XINPUT_GAMEPAD   Gamepad;
+    XINPUT_VIBRATION Vibration;
+} XINPUT_CAPABILITIES, *PXINPUT_CAPABILITIES;
+
+typedef struct _XINPUT_BATTERY_INFORMATION {
+    BYTE BatteryType;
+    BYTE BatteryLevel;
+} XINPUT_BATTERY_INFORMATION, *PXINPUT_BATTERY_INFORMATION;
+
+typedef struct _XINPUT_KEYSTROKE {
+    WORD  VirtualKey;
+    WCHAR Unicode;
+    WORD  Flags;
+    BYTE  UserIndex;
+    BYTE  HidCode;
+} XINPUT_KEYSTROKE, *PXINPUT_KEYSTROKE;
+
+#endif // XINPUT_TYPES_DEFINED
 
 namespace fs = std::filesystem;
 
